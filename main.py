@@ -1,17 +1,23 @@
 import asyncio
+import logging
 import os
 import re
 from datetime import datetime
 
 import requests
 from bs4 import BeautifulSoup
-from aiogram import Bot, Dispatcher, types
+from aiohttp import web
+from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
-from aiogram.webhook import aiohttp_server
+from aiogram.types import Message
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 TOKEN = os.getenv('BOT_TOKEN')
-WEBHOOK_URL = os.getenv('WEBHOOK_URL')  # Se configura en Render: https://tu-servicio.onrender.com/webhook
+WEBHOOK_PATH = "/webhook"
+WEBHOOK_URL = os.getenv('WEBHOOK_URL')  # e.g., https://hyperdash-wallet-bot.onrender.com/webhook
+WEB_SERVER_HOST = "0.0.0.0"
+WEB_SERVER_PORT = int(os.getenv('PORT', 8080))
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
@@ -81,7 +87,7 @@ async def periodic_update(user_id: int):
         pass
 
 @dp.message(Command("start"))
-async def start_handler(message: types.Message):
+async def start_handler(message: Message):
     instructions = (
         "¡Bienvenido al Bot Hyperdash Wallet! 👋\n\n"
         "Este bot te permite rastrear wallets en HyperDash.\n\n"
@@ -93,7 +99,7 @@ async def start_handler(message: types.Message):
     await message.answer(instructions)
 
 @dp.message(Command("wallet"))
-async def wallet_handler(message: types.Message):
+async def wallet_handler(message: Message):
     parts = message.text.split(maxsplit=1)
     if len(parts) < 2:
         await message.answer("❌ Proporciona una dirección: /wallet <dirección>")
@@ -127,7 +133,7 @@ async def wallet_handler(message: types.Message):
     await periodic_update(user_id)  # Envío inmediato
 
 @dp.message(Command("stopwallet"))
-async def stop_handler(message: types.Message):
+async def stop_handler(message: Message):
     user_id = message.from_user.id
     if user_id not in tracking:
         await message.answer("ℹ️ No estás rastreando ninguna wallet.")
@@ -137,31 +143,41 @@ async def stop_handler(message: types.Message):
     del tracking[user_id]
     await message.answer("🛑 Seguimiento detenido.")
 
-async def on_startup():
+async def on_startup(bot: Bot) -> None:
     """Configura webhook al iniciar."""
     await bot.set_webhook(WEBHOOK_URL)
-    print(f"Webhook configurado en {WEBHOOK_URL}")
+    scheduler.start()
+    logging.info(f"Webhook configurado en {WEBHOOK_URL}")
 
-async def on_shutdown():
+async def on_shutdown(bot: Bot) -> None:
     """Limpieza al cerrar."""
     await bot.delete_webhook()
     scheduler.shutdown()
+    logging.info("Webhook eliminado y scheduler detenido.")
 
-async def main():
-    scheduler.start()
-    await on_startup()
-    # Servidor webhook
-    app = aiohttp_server.create_app(dispatcher=dp, bot=bot, webhook_path="/webhook")
-    port = int(os.getenv('PORT', 8080))
-    await aiohttp_server.start_webhook(
-        app,
-        host="0.0.0.0",
-        port=port,
-        webhook_path="/webhook"
-    )
+def main():
+    # Configura logging
+    logging.basicConfig(level=logging.INFO)
+
+    # Registra hooks
+    dp.startup.register(on_startup)
+    dp.shutdown.register(on_shutdown)
+
+    # Crea la app aiohttp
+    app = web.Application()
+
+    # Configura el handler de webhook
+    webhook_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
+    webhook_handler.register(app, path=WEBHOOK_PATH)
+
+    # Monta hooks del dispatcher en la app
+    setup_application(app, dp, bot=bot)
+
+    # Inicia el servidor
+    web.run_app(app, host=WEB_SERVER_HOST, port=WEB_SERVER_PORT)
 
 if __name__ == "__main__":
     try:
-        asyncio.run(main())
+        main()
     except (KeyboardInterrupt, SystemExit):
-        asyncio.run(on_shutdown())
+        logging.info("Aplicación detenida.")
