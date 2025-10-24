@@ -1,8 +1,0 @@
-aiogram==3.22.0
-requests==2.32.3
-beautifulsoup4==4.12.3
-APScheduler==3.10.4
-aiohttp==3.9.5
-pydantic==2.8.2
-pydantic-core==2.20.1
-selenium==4.26.1
