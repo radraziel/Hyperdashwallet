@@ -181,6 +181,15 @@ application.add_handler(CommandHandler("wallet", wallet))
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_unknown))
 
 
+# --- INICIO DE LA CORRECCIÓN ---
+# Inicializamos la app (ej. descarga info del bot) ANTES de que Flask la use.
+# Esto evita el error 'Application was not initialized'.
+logger.info("Inicializando la aplicación del bot...")
+asyncio.run(application.initialize())
+logger.info("Aplicación inicializada exitosamente.")
+# --- FIN DE LA CORRECCIÓN ---
+
+
 # --- Configuración del Servidor Flask (para Render) ---
 
 app = Flask(__name__) # Este objeto 'app' es el que Gunicorn usará
