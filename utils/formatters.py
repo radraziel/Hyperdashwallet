@@ -1,12 +1,11 @@
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
-# Python 3.9+ trae zoneinfo en la stdlib
 try:
     from zoneinfo import ZoneInfo
     MX_TZ = ZoneInfo("America/Mexico_City")
 except Exception:
-    MX_TZ = None  # Fallback a UTC si no está disponible
+    MX_TZ = None  # Fallback UTC
 
 # =========================
 # Helpers numéricos
@@ -20,13 +19,15 @@ def _to_decimal(x):
     except (InvalidOperation, ValueError, TypeError):
         return None
 
-def fmt_num(x, decimals: int = 2):
+def fmt_num(x, decimals: int = 2, show_sign: bool = False):
+    """Formatea número con comas, decimales y signo opcional."""
     d = _to_decimal(x)
     if d is None:
         return str(x) if x is not None else "-"
     q = Decimal(10) ** -decimals
     d = d.quantize(q)
-    return f"{d:,.{decimals}f}"
+    sign = "+" if show_sign and d > 0 else ""  # incluye + solo si es positivo
+    return f"{sign}{d:,.{decimals}f}"
 
 def fmt_usd(x, decimals: int = 2):
     d = _to_decimal(x)
@@ -37,7 +38,6 @@ def fmt_usd(x, decimals: int = 2):
     return f"${d:,.{decimals}f}"
 
 def _offset_str(dt):
-    """Devuelve offset como 'GMT-06:00'."""
     try:
         ofs = dt.utcoffset()
         if ofs is None:
@@ -52,22 +52,15 @@ def _offset_str(dt):
         return "GMT+00:00"
 
 def _ts_local(ms: int) -> str:
-    """
-    Convierte timestamp(ms) a America/Mexico_City (GMT-6/-5 según aplique).
-    Formato: 'YYYY-MM-DD HH:MM GMT-06:00'
-    """
     try:
         dt_utc = datetime.fromtimestamp(int(ms) / 1000, tz=timezone.utc)
-        if MX_TZ is not None:
-            dt_local = dt_utc.astimezone(MX_TZ)
-        else:
-            dt_local = dt_utc  # fallback UTC
+        dt_local = dt_utc.astimezone(MX_TZ) if MX_TZ else dt_utc
         return f"{dt_local.strftime('%Y-%m-%d %H:%M')} {_offset_str(dt_local)}"
     except Exception:
         return "-"
 
 # =========================
-# Texto de ayuda (HTML)
+# Texto de ayuda
 # =========================
 
 def usage_instructions_md() -> str:
@@ -84,8 +77,9 @@ def usage_instructions_md() -> str:
     )
 
 # =========================
-# Emojis / Visual
+# Emojis visuales
 # =========================
+
 LONG_EMOJI = "🟢"
 SHORT_EMOJI = "🔴"
 NEUTRAL_EMOJI = "⚪️"
@@ -96,12 +90,13 @@ def side_html(szi_decimal: Decimal | None) -> str:
     return f"{LONG_EMOJI} <b>Long</b>" if szi_decimal > 0 else f"{SHORT_EMOJI} <b>Short</b>"
 
 def pnl_html(u_pnl_decimal: Decimal | None, formatted_value: str) -> str:
+    """Agrega emoji y color segun signo"""
     if u_pnl_decimal is None or u_pnl_decimal == 0:
         return f"{NEUTRAL_EMOJI} <b>{formatted_value}</b>"
     return f"{LONG_EMOJI} <b>{formatted_value}</b>" if u_pnl_decimal > 0 else f"{SHORT_EMOJI} <b>{formatted_value}</b>"
 
 # =========================
-# Formateadores (lista)
+# Formateadores
 # =========================
 
 def format_positions_md(state: dict) -> str:
@@ -132,11 +127,11 @@ def format_positions_md(state: dict) -> str:
         szi_f = fmt_num(szi, 2)
         entry_f = fmt_num(entry, 2)
         liq_f = fmt_num(liq, 2)
-        pnl_f = fmt_num(u_pnl, 2)
+        # aquí el signo +/−
+        pnl_f = fmt_num(u_pnl, 2, show_sign=True)
         ntl_f = fmt_usd(ntl, 2)
         pnl_badge = pnl_html(u_pnl_d, pnl_f)
 
-        # Formato de lista (el que te gustaba), con etiquetas en español
         lines.append(
             f"• <b>{coin}</b>: {side}  Tamaño Crypto={szi_f}  Valor de posición={ntl_f}\n"
             f"  Precio de entrada={entry_f}  Liquidación={liq_f}  P&L={pnl_badge}  Apalancamiento={lev_val}x {lev_type}"
@@ -156,10 +151,11 @@ def format_open_orders_md(orders: list, limit: int = 8) -> str:
         coin = o.get("coin", "-")
         side = o.get("side", "-")
         side_txt = "Sell" if side == "A" else ("Buy" if side == "B" else str(side))
-        # Emoji de lado
-        side_html_badge = f"{LONG_EMOJI} <b>{side_txt}</b>" if side_txt.lower().startswith("b") \
-                          else f"{SHORT_EMOJI} <b>{side_txt}</b>" if side_txt.lower().startswith("s") \
-                          else f"{NEUTRAL_EMOJI} <b>{side_txt}</b>"
+        side_html_badge = (
+            f"{LONG_EMOJI} <b>{side_txt}</b>" if side_txt.lower().startswith("b")
+            else f"{SHORT_EMOJI} <b>{side_txt}</b>" if side_txt.lower().startswith("s")
+            else f"{NEUTRAL_EMOJI} <b>{side_txt}</b>"
+        )
         sz = fmt_num(o.get("sz", o.get("origSz", "-")), 2)
         px = fmt_num(o.get("limitPx", "-"), 2)
         typ = o.get("orderType", "Limit")
@@ -187,6 +183,5 @@ def format_recent_fills_md(fills: list, limit: int = 5) -> str:
         sz = fmt_num(f.get("sz", "-"), 2)
         px = fmt_num(f.get("px", "-"), 2)
         t = _ts_local(f.get("time"))
-
         out.append(f"• {t} — <b>{coin}</b> {emoji} <b>{dirn}</b> {sz}@{px}")
     return "\n".join(out)
