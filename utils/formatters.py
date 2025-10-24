@@ -1,11 +1,12 @@
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
+# Zona horaria local (CDMX)
 try:
     from zoneinfo import ZoneInfo
     MX_TZ = ZoneInfo("America/Mexico_City")
 except Exception:
-    MX_TZ = None  # Fallback UTC
+    MX_TZ = None  # Fallback a UTC si no está disponible
 
 # =========================
 # Helpers numéricos
@@ -20,13 +21,13 @@ def _to_decimal(x):
         return None
 
 def fmt_num(x, decimals: int = 2, show_sign: bool = False):
-    """Formatea número con comas, decimales y signo opcional."""
+    """Formatea número con comas, decimales y signo opcional (+ para positivos)."""
     d = _to_decimal(x)
     if d is None:
         return str(x) if x is not None else "-"
     q = Decimal(10) ** -decimals
     d = d.quantize(q)
-    sign = "+" if show_sign and d > 0 else ""  # incluye + solo si es positivo
+    sign = "+" if show_sign and d > 0 else ""
     return f"{sign}{d:,.{decimals}f}"
 
 def fmt_usd(x, decimals: int = 2):
@@ -38,6 +39,7 @@ def fmt_usd(x, decimals: int = 2):
     return f"${d:,.{decimals}f}"
 
 def _offset_str(dt):
+    """Devuelve offset como 'GMT-06:00'."""
     try:
         ofs = dt.utcoffset()
         if ofs is None:
@@ -52,6 +54,9 @@ def _offset_str(dt):
         return "GMT+00:00"
 
 def _ts_local(ms: int) -> str:
+    """
+    'YYYY-MM-DD HH:MM GMT-06:00' (para cabeceras 'Actualizado').
+    """
     try:
         dt_utc = datetime.fromtimestamp(int(ms) / 1000, tz=timezone.utc)
         dt_local = dt_utc.astimezone(MX_TZ) if MX_TZ else dt_utc
@@ -59,8 +64,19 @@ def _ts_local(ms: int) -> str:
     except Exception:
         return "-"
 
+def _ts_local_short(ms: int) -> str:
+    """
+    'YYYY-MM-DD HH:MM' sin sufijo GMT (para Fills recientes).
+    """
+    try:
+        dt_utc = datetime.fromtimestamp(int(ms) / 1000, tz=timezone.utc)
+        dt_local = dt_utc.astimezone(MX_TZ) if MX_TZ else dt_utc
+        return dt_local.strftime('%Y-%m-%d %H:%M')
+    except Exception:
+        return "-"
+
 # =========================
-# Texto de ayuda
+# Texto de ayuda (HTML)
 # =========================
 
 def usage_instructions_md() -> str:
@@ -77,9 +93,8 @@ def usage_instructions_md() -> str:
     )
 
 # =========================
-# Emojis visuales
+# Emojis / Visual
 # =========================
-
 LONG_EMOJI = "🟢"
 SHORT_EMOJI = "🔴"
 NEUTRAL_EMOJI = "⚪️"
@@ -90,13 +105,13 @@ def side_html(szi_decimal: Decimal | None) -> str:
     return f"{LONG_EMOJI} <b>Long</b>" if szi_decimal > 0 else f"{SHORT_EMOJI} <b>Short</b>"
 
 def pnl_html(u_pnl_decimal: Decimal | None, formatted_value: str) -> str:
-    """Agrega emoji y color segun signo"""
+    """Agrega emoji según signo al P&L ya formateado con +/-."""
     if u_pnl_decimal is None or u_pnl_decimal == 0:
-        return f"{NEUTRAL_EMOJI} <b>{formatted_value}</b>"
-    return f"{LONG_EMOJI} <b>{formatted_value}</b>" if u_pnl_decimal > 0 else f"{SHORT_EMOJI} <b>{formatted_value}</b>"
+        return f"{NEUTRAL_EMOJI} {formatted_value}"
+    return f"{LONG_EMOJI} {formatted_value}" if u_pnl_decimal > 0 else f"{SHORT_EMOJI} {formatted_value}"
 
 # =========================
-# Formateadores
+# Formateadores (lista con líneas por campo)
 # =========================
 
 def format_positions_md(state: dict) -> str:
@@ -107,7 +122,9 @@ def format_positions_md(state: dict) -> str:
     if not assets:
         return "📌 <b>Posiciones abiertas</b>: (ninguna)"
 
-    lines = ["📌 <b>Posiciones abiertas</b>"]
+    out = ["📌 <b>Posiciones abiertas</b>"]
+    lines = []
+
     for ap in assets:
         pos = ap.get("position") or {}
         coin = pos.get("coin", "-")
@@ -127,31 +144,39 @@ def format_positions_md(state: dict) -> str:
         szi_f = fmt_num(szi, 2)
         entry_f = fmt_num(entry, 2)
         liq_f = fmt_num(liq, 2)
-        # aquí el signo +/−
         pnl_f = fmt_num(u_pnl, 2, show_sign=True)
         ntl_f = fmt_usd(ntl, 2)
         pnl_badge = pnl_html(u_pnl_d, pnl_f)
 
-        lines.append(
-            f"• <b>{coin}</b>: {side}  Tamaño Crypto={szi_f}  Valor de posición={ntl_f}\n"
-            f"  Precio de entrada={entry_f}  Liquidación={liq_f}  P&L={pnl_badge}  Apalancamiento={lev_val}x {lev_type}"
-        )
+        # Layout móvil: un campo por línea, con línea en blanco al final
+        block = [
+            f"• <b>{coin}</b>: {side}  Tamaño Crypto={szi_f}",
+            f"Valor de posición={ntl_f}",
+            f"Precio de entrada={entry_f}",
+            f"Liquidación={liq_f}",
+            f"P&L={pnl_badge}",
+            f"Apalancamiento={lev_val}x {lev_type}",
+            ""  # línea en blanco entre instrumentos
+        ]
+        lines.extend(block)
 
     ms = state.get("time")
     if ms:
         lines.append(f"<i>Actualizado: {_ts_local(ms)}</i>")
-    return "\n".join(lines)
+
+    out.append("\n".join(lines))
+    return "\n".join(out)
 
 def format_open_orders_md(orders: list, limit: int = 8) -> str:
     if not orders:
         return "📋 <b>Órdenes abiertas</b>: (ninguna)"
-    rows = orders[:limit]
+
     out = ["📋 <b>Órdenes abiertas</b>"]
-    for o in rows:
+    for o in orders[:limit]:
         coin = o.get("coin", "-")
         side = o.get("side", "-")
         side_txt = "Sell" if side == "A" else ("Buy" if side == "B" else str(side))
-        side_html_badge = (
+        side_badge = (
             f"{LONG_EMOJI} <b>{side_txt}</b>" if side_txt.lower().startswith("b")
             else f"{SHORT_EMOJI} <b>{side_txt}</b>" if side_txt.lower().startswith("s")
             else f"{NEUTRAL_EMOJI} <b>{side_txt}</b>"
@@ -163,9 +188,8 @@ def format_open_orders_md(orders: list, limit: int = 8) -> str:
         tpx_raw = o.get("triggerPx", "0")
         tpx = fmt_num(tpx_raw, 2) if tpx_raw not in (None, "0", 0) else "0.00"
 
-        out.append(
-            f"• <b>{coin}</b> {side_html_badge} {sz}@{px}  ({typ}, trig={trig} {tpx})"
-        )
+        out.append(f"• <b>{coin}</b> {side_badge} {sz}@{px}  ({typ}, trig={trig} {tpx})")
+
     if len(orders) > limit:
         out.append(f"<i>…y {len(orders)-limit} más</i>")
     return "\n".join(out)
@@ -173,15 +197,15 @@ def format_open_orders_md(orders: list, limit: int = 8) -> str:
 def format_recent_fills_md(fills: list, limit: int = 5) -> str:
     if not fills:
         return "🧾 <b>Fills recientes</b>: (sin actividad)"
-    rows = fills[:limit]
+
     out = ["🧾 <b>Fills recientes</b>"]
-    for f in rows:
+    for f in fills[:limit]:
         coin = f.get("coin", "-")
         dirn = f.get("dir", "-") or "-"
         dlow = dirn.lower()
         emoji = LONG_EMOJI if "long" in dlow else SHORT_EMOJI if "short" in dlow else NEUTRAL_EMOJI
         sz = fmt_num(f.get("sz", "-"), 2)
         px = fmt_num(f.get("px", "-"), 2)
-        t = _ts_local(f.get("time"))
+        t = _ts_local_short(f.get("time"))
         out.append(f"• {t} — <b>{coin}</b> {emoji} <b>{dirn}</b> {sz}@{px}")
     return "\n".join(out)
