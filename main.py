@@ -1,17 +1,14 @@
-import asyncio
 import logging
 import os
-import re
-from datetime import datetime
-
-import requests
-from bs4 import BeautifulSoup
 from aiohttp import web
 from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
 from aiogram.types import Message
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
+import requests
+from bs4 import BeautifulSoup
+import re
+from datetime import datetime
 
 TOKEN = os.getenv('BOT_TOKEN')
 WEBHOOK_PATH = "/webhook"
@@ -21,13 +18,9 @@ WEB_SERVER_PORT = int(os.getenv('PORT', 8080))
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
-scheduler = AsyncIOScheduler()
-
-# Almacenamiento en memoria (user_id: {'address': str, 'job_id': str})
-tracking = {}
 
 async def fetch_wallet_data(address: str) -> str:
-    """Scraping de datos de HyperDash con manejo de encabezados y retries."""
+    """Scraping de datos de HyperDash con manejo avanzado de bloqueos."""
     url = f"https://hyperdash.info/trader/{address}"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
@@ -36,25 +29,32 @@ async def fetch_wallet_data(address: str) -> str:
         "Referer": "https://hyperdash.info/",
     }
     try:
-        # Intenta la solicitud con retries
+        # Intento 1: Solicitud directa con headers
         response = requests.get(url, headers=headers, timeout=10)
-        response.raise_for_status()  # Lanza excepción si hay error (e.g., 403)
+        response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # Intento 2: Si falla, simula un navegador más
+        if not soup.find('div', {'class': 'asset-positions'}):  # Ajusta selector
+            headers["User-Agent"] = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Safari/605.1.15"
+            response = requests.get(url, headers=headers, timeout=10)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, 'html.parser')
 
-        # Parsing de posiciones abiertas (ajusta selectores según HTML real)
+        # Parsing de posiciones abiertas
         positions = []
-        pos_section = soup.find('div', {'class': 'asset-positions'})  # Ajusta clase/id
+        pos_section = soup.find('div', {'class': 'asset-positions'})  # Ajusta según HTML real
         if pos_section:
             rows = pos_section.find_all('tr')
-            for row in rows[1:]:  # Salta header
+            for row in rows[1:]:
                 cols = row.find_all('td')
                 if len(cols) >= 3:
                     asset = cols[0].get_text(strip=True)
-                    pos_type = cols[1].get_text(strip=True)  # Long/Short
+                    pos_type = cols[1].get_text(strip=True)
                     amount = cols[2].get_text(strip=True)
                     positions.append(f"{asset}: {pos_type} {amount}")
 
-        # Órdenes abiertas (ajusta)
+        # Órdenes abiertas
         orders_text = "Órdenes abiertas: 0"
         orders_section = soup.find('div', {'class': 'open-orders'})
         if orders_section:
@@ -62,7 +62,7 @@ async def fetch_wallet_data(address: str) -> str:
             count = count_elem.get_text(strip=True) if count_elem else "0"
             orders_text = f"Órdenes abiertas: {count}"
 
-        # Movimientos recientes (fills/trades, últimos 5)
+        # Movimientos recientes
         recent = []
         fills_section = soup.find('div', {'class': 'recent-fills'})
         if fills_section:
@@ -71,27 +71,15 @@ async def fetch_wallet_data(address: str) -> str:
                 recent.append(item.get_text(strip=True))
 
         message = (
-            f"📊 **Actualización para {address}** ({datetime.now().strftime('%Y-%m-%d %H:%M')})\n\n"
+            f"📊 **Datos para {address}** ({datetime.now().strftime('%Y-%m-%d %H:%M')})\n\n"
             f"**Posiciones abiertas:**\n" + "\n".join(positions) + "\n\n"
             f"{orders_text}\n\n"
-            f"**Movimientos recientes:**\n" + "\n".join(recent[:3])  # Limita a 3
+            f"**Movimientos recientes:**\n" + "\n".join(recent[:3])
         )
         return message if positions or recent else "No se encontraron datos. Verifica la dirección."
 
     except requests.exceptions.RequestException as e:
         return f"❌ Error al obtener datos: {str(e)} (Código: {getattr(e.response, 'status_code', 'N/A')})"
-
-async def periodic_update(user_id: int):
-    """Función para envío periódico."""
-    if user_id not in tracking:
-        return
-    address = tracking[user_id]['address']
-    data = await fetch_wallet_data(address)
-    try:
-        await bot.send_message(user_id, data, parse_mode='Markdown')
-    except Exception:
-        # Usuario bloqueó el bot o error
-        pass
 
 @dp.message(Command("start"))
 async def start_handler(message: Message):
@@ -99,9 +87,9 @@ async def start_handler(message: Message):
         "¡Bienvenido al Bot Hyperdash Wallet! 👋\n\n"
         "Este bot te permite rastrear wallets en HyperDash.\n\n"
         "**Comandos:**\n"
-        "/wallet <dirección> - Inicia el seguimiento (ej: /wallet 0xc2a30212a8ddac9e123944d6e29faddce994e5f2)\n"
-        "/stopwallet - Detiene el seguimiento\n\n"
-        "Se enviarán actualizaciones cada 10 minutos automáticamente."
+        "/wallet <dirección> - Obtiene datos actuales (ej: /wallet 0xc2a30212a8ddac9e123944d6e29faddce994e5f2)\n"
+        "/stopwallet - No aplica sin seguimiento automático\n\n"
+        "Solicita datos manualmente cuando lo necesites."
     )
     await message.answer(instructions)
 
@@ -117,70 +105,33 @@ async def wallet_handler(message: Message):
         await message.answer("❌ Dirección inválida (debe ser Ethereum 0x... 40 chars).")
         return
 
-    user_id = message.from_user.id
-    job_id = f"track_{user_id}"
-
-    # Detener job anterior si existe
-    if user_id in tracking:
-        scheduler.remove_job(tracking[user_id]['job_id'])
-
-    # Agregar nuevo job
-    scheduler.add_job(
-        periodic_update,
-        'interval',
-        minutes=10,
-        id=job_id,
-        args=(user_id,),
-        replace_existing=True
-    )
-    tracking[user_id] = {'address': address, 'job_id': job_id}
-
-    # Envío inicial
-    await message.answer(f"✅ Iniciado seguimiento de {address}.\nPrimer update en 10 min.")
-    await periodic_update(user_id)  # Envío inmediato
+    data = await fetch_wallet_data(address)
+    await message.answer(data, parse_mode='Markdown')
 
 @dp.message(Command("stopwallet"))
 async def stop_handler(message: Message):
-    user_id = message.from_user.id
-    if user_id not in tracking:
-        await message.answer("ℹ️ No estás rastreando ninguna wallet.")
-        return
-
-    scheduler.remove_job(tracking[user_id]['job_id'])
-    del tracking[user_id]
-    await message.answer("🛑 Seguimiento detenido.")
+    await message.answer("ℹ️ El seguimiento automático no está habilitado. Usa /wallet para consultas manuales.")
 
 async def on_startup(bot: Bot) -> None:
     """Configura webhook al iniciar."""
     await bot.set_webhook(WEBHOOK_URL)
-    scheduler.start()
     logging.info(f"Webhook configurado en {WEBHOOK_URL}")
 
 async def on_shutdown(bot: Bot) -> None:
     """Limpieza al cerrar."""
     await bot.delete_webhook()
-    scheduler.shutdown()
-    logging.info("Webhook eliminado y scheduler detenido.")
+    logging.info("Webhook eliminado.")
 
 def main():
-    # Configura logging
     logging.basicConfig(level=logging.INFO)
-
-    # Registra hooks
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
 
-    # Crea la app aiohttp
     app = web.Application()
-
-    # Configura el handler de webhook
     webhook_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
     webhook_handler.register(app, path=WEBHOOK_PATH)
-
-    # Monta hooks del dispatcher en la app
     setup_application(app, dp, bot=bot)
 
-    # Inicia el servidor
     web.run_app(app, host=WEB_SERVER_HOST, port=WEB_SERVER_PORT)
 
 if __name__ == "__main__":
