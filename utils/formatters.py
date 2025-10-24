@@ -1,4 +1,36 @@
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
+
+# ===== Helpers de formato numérico =====
+
+def _to_decimal(x):
+    if x is None:
+        return None
+    try:
+        # Hyperliquid suele mandar números como str o numérico
+        return Decimal(str(x))
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+
+def fmt_num(x, decimals: int = 2):
+    """
+    Formatea con comas y decimales fijos. Si no es numérico, devuelve el valor tal cual.
+    """
+    d = _to_decimal(x)
+    if d is None:
+        return str(x) if x is not None else "-"
+    q = Decimal(10) ** -decimals
+    d = d.quantize(q)  # redondeo a 'decimals'
+    # Usamos formato con miles
+    return f"{d:,.{decimals}f}"
+
+def fmt_usd(x, decimals: int = 2):
+    d = _to_decimal(x)
+    if d is None:
+        return str(x) if x is not None else "-"
+    q = Decimal(10) ** -decimals
+    d = d.quantize(q)
+    return f"${d:,.{decimals}f}"
 
 def _ts(ms: int) -> str:
     try:
@@ -18,6 +50,8 @@ def usage_instructions_md() -> str:
         "_Tip:_ puedes re-ejecutar `/wallet` con otra dirección para cambiar de seguimiento."
     )
 
+# ===== Formateadores de bloques =====
+
 def format_positions_md(state: dict) -> str:
     if not state or "assetPositions" not in state:
         return "📌 *Posiciones*: (sin datos)"
@@ -31,11 +65,11 @@ def format_positions_md(state: dict) -> str:
         pos = ap.get("position") or {}
         coin = pos.get("coin", "-")
         szi = pos.get("szi", "0")
-        # szi > 0: Long, < 0: Short
         try:
-            side = "Long" if float(szi) > 0 else ("Short" if float(szi) < 0 else "Flat")
+            side = "Long" if Decimal(str(szi)) > 0 else ("Short" if Decimal(str(szi)) < 0 else "Flat")
         except Exception:
             side = "?"
+
         entry = pos.get("entryPx", "-")
         value = pos.get("positionValue", "-")
         liq = pos.get("liquidationPx", "-")
@@ -43,9 +77,17 @@ def format_positions_md(state: dict) -> str:
         lev = pos.get("leverage", {})
         lev_val = lev.get("value", "")
         lev_type = lev.get("type", "")
+
+        # Aplicamos formato con comas y 2 decimales
+        szi_f = fmt_num(szi, 2)
+        value_f = fmt_usd(value, 2)
+        entry_f = fmt_num(entry, 2)
+        liq_f = fmt_num(liq, 2)
+        u_pnl_f = fmt_num(u_pnl, 2)
+
         lines.append(
-            f"• {coin}: *{side}*  size=`{szi}`  ntl=`${value}`\n"
-            f"  entry=`{entry}`  liq=`{liq}`  uPnL=`{u_pnl}`  lev=`{lev_val}x {lev_type}`"
+            f"• {coin}: *{side}*  size={szi_f}  ntl={value_f}\n"
+            f"  entry={entry_f}  liq={liq_f}  uPnL={u_pnl_f}  lev={lev_val}x {lev_type}"
         )
 
     ms = state.get("time")
@@ -67,7 +109,12 @@ def format_open_orders_md(orders: list, limit: int = 8) -> str:
         typ = o.get("orderType", "Limit")
         trig = o.get("triggerCondition", "N/A")
         tpx = o.get("triggerPx", "0")
-        out.append(f"• {coin} {side_txt} {sz}@{px}  ({typ}, trig={trig} {tpx})")
+
+        sz_f = fmt_num(sz, 2)
+        px_f = fmt_num(px, 2)
+        tpx_f = fmt_num(tpx, 2) if tpx not in (None, "0", 0) else "0.00"
+
+        out.append(f"• {coin} {side_txt} {sz_f}@{px_f}  ({typ}, trig={trig} {tpx_f})")
     if len(orders) > limit:
         out.append(f"_…y {len(orders)-limit} más_")
     return "\n".join(out)
@@ -83,5 +130,9 @@ def format_recent_fills_md(fills: list, limit: int = 5) -> str:
         sz = f.get("sz", "-")
         px = f.get("px", "-")
         t = _ts(f.get("time"))
-        out.append(f"• {t} — {coin} {dirn} {sz}@{px}")
+
+        sz_f = fmt_num(sz, 2)
+        px_f = fmt_num(px, 2)
+
+        out.append(f"• {t} — {coin} {dirn} {sz_f}@{px_f}")
     return "\n".join(out)
