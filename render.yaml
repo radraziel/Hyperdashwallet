@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: hyperdash-wallet-bot
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout 120
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: HYPERLIQUID_INFO_URL
+        value: https://api.hyperliquid.xyz/info
