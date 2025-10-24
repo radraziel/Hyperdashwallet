@@ -27,18 +27,25 @@ scheduler = AsyncIOScheduler()
 tracking = {}
 
 async def fetch_wallet_data(address: str) -> str:
-    """Scraping de datos de HyperDash. AJUSTA LOS SELECTORES BASADO EN EL HTML REAL."""
+    """Scraping de datos de HyperDash con manejo de encabezados y retries."""
     url = f"https://hyperdash.info/trader/{address}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Referer": "https://hyperdash.info/",
+    }
     try:
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
+        # Intenta la solicitud con retries
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()  # Lanza excepción si hay error (e.g., 403)
         soup = BeautifulSoup(response.text, 'html.parser')
 
-        # Parsing de posiciones abiertas (ajusta selectores)
+        # Parsing de posiciones abiertas (ajusta selectores según HTML real)
         positions = []
-        pos_section = soup.find('div', {'class': 'asset-positions'})  # Ejemplo: busca por clase o id
+        pos_section = soup.find('div', {'class': 'asset-positions'})  # Ajusta clase/id
         if pos_section:
-            rows = pos_section.find_all('tr')  # Asume tabla
+            rows = pos_section.find_all('tr')
             for row in rows[1:]:  # Salta header
                 cols = row.find_all('td')
                 if len(cols) >= 3:
@@ -48,10 +55,10 @@ async def fetch_wallet_data(address: str) -> str:
                     positions.append(f"{asset}: {pos_type} {amount}")
 
         # Órdenes abiertas (ajusta)
-        orders_text = "Órdenes abiertas: 0"  # Placeholder
+        orders_text = "Órdenes abiertas: 0"
         orders_section = soup.find('div', {'class': 'open-orders'})
         if orders_section:
-            count_elem = orders_section.find('span', {'class': 'order-count'})  # Ejemplo
+            count_elem = orders_section.find('span', {'class': 'order-count'})
             count = count_elem.get_text(strip=True) if count_elem else "0"
             orders_text = f"Órdenes abiertas: {count}"
 
@@ -59,7 +66,7 @@ async def fetch_wallet_data(address: str) -> str:
         recent = []
         fills_section = soup.find('div', {'class': 'recent-fills'})
         if fills_section:
-            items = fills_section.find_all('div', {'class': 'fill-item'}, limit=5)  # Ejemplo
+            items = fills_section.find_all('div', {'class': 'fill-item'}, limit=5)
             for item in items:
                 recent.append(item.get_text(strip=True))
 
@@ -67,12 +74,12 @@ async def fetch_wallet_data(address: str) -> str:
             f"📊 **Actualización para {address}** ({datetime.now().strftime('%Y-%m-%d %H:%M')})\n\n"
             f"**Posiciones abiertas:**\n" + "\n".join(positions) + "\n\n"
             f"{orders_text}\n\n"
-            f"**Movimientos recientes:**\n" + "\n".join(recent[:3])  # Limita a 3 para Telegram
+            f"**Movimientos recientes:**\n" + "\n".join(recent[:3])  # Limita a 3
         )
         return message if positions or recent else "No se encontraron datos. Verifica la dirección."
 
-    except Exception as e:
-        return f"❌ Error al obtener datos: {str(e)}"
+    except requests.exceptions.RequestException as e:
+        return f"❌ Error al obtener datos: {str(e)} (Código: {getattr(e.response, 'status_code', 'N/A')})"
 
 async def periodic_update(user_id: int):
     """Función para envío periódico."""
