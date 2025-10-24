@@ -1,11 +1,12 @@
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
+# Zona horaria local (CDMX)
 try:
     from zoneinfo import ZoneInfo
     MX_TZ = ZoneInfo("America/Mexico_City")
 except Exception:
-    MX_TZ = None  # Fallback a UTC
+    MX_TZ = None  # Fallback a UTC si no está disponible
 
 # =========================
 # Helpers numéricos
@@ -20,6 +21,7 @@ def _to_decimal(x):
         return None
 
 def fmt_num(x, decimals: int = 2, show_sign: bool = False):
+    """Formatea número con comas, decimales y signo opcional (+ para positivos)."""
     d = _to_decimal(x)
     if d is None:
         return str(x) if x is not None else "-"
@@ -28,18 +30,16 @@ def fmt_num(x, decimals: int = 2, show_sign: bool = False):
     sign = "+" if show_sign and d > 0 else ""
     return f"{sign}{d:,.{decimals}f}"
 
-def fmt_usd(x, decimals: int = 2, bold: bool = False):
-    """Permite poner en negritas el valor si bold=True."""
+def fmt_usd(x, decimals: int = 2):
     d = _to_decimal(x)
     if d is None:
-        val = str(x) if x is not None else "-"
-    else:
-        q = Decimal(10) ** -decimals
-        d = d.quantize(q)
-        val = f"${d:,.{decimals}f}"
-    return f"<b>{val}</b>" if bold else val
+        return str(x) if x is not None else "-"
+    q = Decimal(10) ** -decimals
+    d = d.quantize(q)
+    return f"${d:,.{decimals}f}"
 
 def _offset_str(dt):
+    """Devuelve offset como 'GMT-06:00'."""
     try:
         ofs = dt.utcoffset()
         if ofs is None:
@@ -54,6 +54,9 @@ def _offset_str(dt):
         return "GMT+00:00"
 
 def _ts_local(ms: int) -> str:
+    """
+    'YYYY-MM-DD HH:MM GMT-06:00' (para cabeceras 'Actualizado').
+    """
     try:
         dt_utc = datetime.fromtimestamp(int(ms) / 1000, tz=timezone.utc)
         dt_local = dt_utc.astimezone(MX_TZ) if MX_TZ else dt_utc
@@ -62,12 +65,32 @@ def _ts_local(ms: int) -> str:
         return "-"
 
 def _ts_local_short(ms: int) -> str:
+    """
+    'YYYY-MM-DD HH:MM' sin sufijo GMT (para Fills recientes).
+    """
     try:
         dt_utc = datetime.fromtimestamp(int(ms) / 1000, tz=timezone.utc)
         dt_local = dt_utc.astimezone(MX_TZ) if MX_TZ else dt_utc
         return dt_local.strftime('%Y-%m-%d %H:%M')
     except Exception:
         return "-"
+
+# =========================
+# Texto de ayuda (HTML)
+# =========================
+
+def usage_instructions_md() -> str:
+    return (
+        "👋 <b>HyperdashWallet Bot</b>\n\n"
+        "Usa este bot para ver <b>posiciones</b>, <b>órdenes abiertas</b> y <b>fills recientes</b> "
+        "de un wallet de Hyperliquid.\n\n"
+        "• Comando principal:\n"
+        "<code>/wallet &lt;address&gt;</code>\n"
+        "Ejemplo:\n"
+        "<code>/wallet 0xc2a30212a8ddac9e123944d6e29faddce994e5f2</code>\n\n"
+        "También puedes pegar una URL de HyperDash y detectaremos el address automáticamente.\n\n"
+        "<i>Tip:</i> puedes re-ejecutar /wallet con otra dirección para cambiar de seguimiento."
+    )
 
 # =========================
 # Emojis / Visual
@@ -82,12 +105,13 @@ def side_html(szi_decimal: Decimal | None) -> str:
     return f"{LONG_EMOJI} <b>Long</b>" if szi_decimal > 0 else f"{SHORT_EMOJI} <b>Short</b>"
 
 def pnl_html(u_pnl_decimal: Decimal | None, formatted_value: str) -> str:
+    """Agrega emoji según signo al P&L ya formateado con +/-."""
     if u_pnl_decimal is None or u_pnl_decimal == 0:
         return f"{NEUTRAL_EMOJI} {formatted_value}"
     return f"{LONG_EMOJI} {formatted_value}" if u_pnl_decimal > 0 else f"{SHORT_EMOJI} {formatted_value}"
 
 # =========================
-# Formateadores
+# Formateadores (lista con líneas por campo)
 # =========================
 
 def format_positions_md(state: dict) -> str:
@@ -121,9 +145,10 @@ def format_positions_md(state: dict) -> str:
         entry_f = fmt_num(entry, 2)
         liq_f = fmt_num(liq, 2)
         pnl_f = fmt_num(u_pnl, 2, show_sign=True)
-        ntl_f = fmt_usd(ntl, 2, bold=True)  # 🔥 ahora se muestra en negritas
+        ntl_f = fmt_usd(ntl, 2)
         pnl_badge = pnl_html(u_pnl_d, pnl_f)
 
+        # Layout móvil: un campo por línea, con línea en blanco al final
         block = [
             f"• <b>{coin}</b>: {side}  Tamaño Crypto={szi_f}",
             f"Valor de posición={ntl_f}",
@@ -131,7 +156,7 @@ def format_positions_md(state: dict) -> str:
             f"Liquidación={liq_f}",
             f"P&L={pnl_badge}",
             f"Apalancamiento={lev_val}x {lev_type}",
-            ""
+            ""  # línea en blanco entre instrumentos
         ]
         lines.extend(block)
 
@@ -145,6 +170,7 @@ def format_positions_md(state: dict) -> str:
 def format_open_orders_md(orders: list, limit: int = 8) -> str:
     if not orders:
         return "📋 <b>Órdenes abiertas</b>: (ninguna)"
+
     out = ["📋 <b>Órdenes abiertas</b>"]
     for o in orders[:limit]:
         coin = o.get("coin", "-")
@@ -171,6 +197,7 @@ def format_open_orders_md(orders: list, limit: int = 8) -> str:
 def format_recent_fills_md(fills: list, limit: int = 5) -> str:
     if not fills:
         return "🧾 <b>Fills recientes</b>: (sin actividad)"
+
     out = ["🧾 <b>Fills recientes</b>"]
     for f in fills[:limit]:
         coin = f.get("coin", "-")
