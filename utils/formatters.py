@@ -1,6 +1,13 @@
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
+# Python 3.9+ trae zoneinfo en la stdlib
+try:
+    from zoneinfo import ZoneInfo
+    MX_TZ = ZoneInfo("America/Mexico_City")
+except Exception:
+    MX_TZ = None  # Fallback a UTC si no está disponible
+
 # =========================
 # Helpers numéricos
 # =========================
@@ -29,9 +36,33 @@ def fmt_usd(x, decimals: int = 2):
     d = d.quantize(q)
     return f"${d:,.{decimals}f}"
 
-def _ts(ms: int) -> str:
+def _offset_str(dt):
+    """Devuelve offset como 'GMT-06:00'."""
     try:
-        return datetime.fromtimestamp(int(ms)/1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%MZ")
+        ofs = dt.utcoffset()
+        if ofs is None:
+            return "GMT+00:00"
+        total_min = int(ofs.total_seconds() // 60)
+        sign = "+" if total_min >= 0 else "-"
+        total_min = abs(total_min)
+        hh = total_min // 60
+        mm = total_min % 60
+        return f"GMT{sign}{hh:02d}:{mm:02d}"
+    except Exception:
+        return "GMT+00:00"
+
+def _ts_local(ms: int) -> str:
+    """
+    Convierte timestamp(ms) a America/Mexico_City (GMT-6/-5 según aplique).
+    Formato: 'YYYY-MM-DD HH:MM GMT-06:00'
+    """
+    try:
+        dt_utc = datetime.fromtimestamp(int(ms) / 1000, tz=timezone.utc)
+        if MX_TZ is not None:
+            dt_local = dt_utc.astimezone(MX_TZ)
+        else:
+            dt_local = dt_utc  # fallback UTC
+        return f"{dt_local.strftime('%Y-%m-%d %H:%M')} {_offset_str(dt_local)}"
     except Exception:
         return "-"
 
@@ -59,30 +90,18 @@ LONG_EMOJI = "🟢"
 SHORT_EMOJI = "🔴"
 NEUTRAL_EMOJI = "⚪️"
 
-def side_emoji_text(szi_decimal: Decimal | None) -> str:
+def side_html(szi_decimal: Decimal | None) -> str:
     if szi_decimal is None or szi_decimal == 0:
-        return f"{NEUTRAL_EMOJI} Flat"
-    return f"{LONG_EMOJI} Long" if szi_decimal > 0 else f"{SHORT_EMOJI} Short"
+        return f"{NEUTRAL_EMOJI} <b>Flat</b>"
+    return f"{LONG_EMOJI} <b>Long</b>" if szi_decimal > 0 else f"{SHORT_EMOJI} <b>Short</b>"
 
-def pnl_emoji_text(u_pnl_decimal: Decimal | None, formatted_value: str) -> str:
+def pnl_html(u_pnl_decimal: Decimal | None, formatted_value: str) -> str:
     if u_pnl_decimal is None or u_pnl_decimal == 0:
-        return f"{NEUTRAL_EMOJI} {formatted_value}"
-    return f"{LONG_EMOJI} {formatted_value}" if u_pnl_decimal > 0 else f"{SHORT_EMOJI} {formatted_value}"
+        return f"{NEUTRAL_EMOJI} <b>{formatted_value}</b>"
+    return f"{LONG_EMOJI} <b>{formatted_value}</b>" if u_pnl_decimal > 0 else f"{SHORT_EMOJI} <b>{formatted_value}</b>"
 
 # =========================
-# Helpers de tabla monoespaciada
-# =========================
-
-def pad(s: str, width: int) -> str:
-    s = str(s)
-    return s[:width].ljust(width)
-
-def row_join(cols: list[str]) -> str:
-    # separador uniforme
-    return "  ".join(cols)
-
-# =========================
-# Formateadores
+# Formateadores (lista)
 # =========================
 
 def format_positions_md(state: dict) -> str:
@@ -93,24 +112,7 @@ def format_positions_md(state: dict) -> str:
     if not assets:
         return "📌 <b>Posiciones abiertas</b>: (ninguna)"
 
-    lines = []
-    # Encabezado visible
-    lines.append("📌 <b>Posiciones abiertas</b>")
-
-    # Cabecera de tabla (monoespaciado)
-    header = row_join([
-        pad("COIN", 5),
-        pad("SIDE", 12),
-        pad("SIZE", 14),
-        pad("ENTRY", 12),
-        pad("LIQ", 12),
-        pad("UPNL", 16),
-        pad("LEV", 8),
-        pad("NTL", 16),
-    ])
-    sep = "-" * len(header)
-
-    body_rows = []
+    lines = ["📌 <b>Posiciones abiertas</b>"]
     for ap in assets:
         pos = ap.get("position") or {}
         coin = pos.get("coin", "-")
@@ -126,54 +128,38 @@ def format_positions_md(state: dict) -> str:
         szi_d = _to_decimal(szi)
         u_pnl_d = _to_decimal(u_pnl)
 
-        side_txt = side_emoji_text(szi_d)
-        u_pnl_txt = pnl_emoji_text(u_pnl_d, fmt_num(u_pnl, 2))
+        side = side_html(szi_d)
+        szi_f = fmt_num(szi, 2)
+        entry_f = fmt_num(entry, 2)
+        liq_f = fmt_num(liq, 2)
+        pnl_f = fmt_num(u_pnl, 2)
+        ntl_f = fmt_usd(ntl, 2)
+        pnl_badge = pnl_html(u_pnl_d, pnl_f)
 
-        row = row_join([
-            pad(coin, 5),
-            pad(side_txt, 12),
-            pad(fmt_num(szi, 2), 14),
-            pad(fmt_num(entry, 2), 12),
-            pad(fmt_num(liq, 2), 12),
-            pad(u_pnl_txt, 16),
-            pad(f"{lev_val}x {lev_type}".strip(), 8),
-            pad(fmt_usd(ntl, 2), 16),
-        ])
-        body_rows.append(row)
+        # Formato de lista (el que te gustaba), con etiquetas en español
+        lines.append(
+            f"• <b>{coin}</b>: {side}  Tamaño Crypto={szi_f}  Valor de posición={ntl_f}\n"
+            f"  Precio de entrada={entry_f}  Liquidación={liq_f}  P&L={pnl_badge}  Apalancamiento={lev_val}x {lev_type}"
+        )
 
     ms = state.get("time")
-    ts = _ts(ms) if ms else None
-
-    table = "<pre>\n" + header + "\n" + sep + "\n" + "\n".join(body_rows) + "\n</pre>"
-    if ts:
-        table += f"\n<i>Actualizado: {ts}</i>"
-
-    lines.append(table)
+    if ms:
+        lines.append(f"<i>Actualizado: {_ts_local(ms)}</i>")
     return "\n".join(lines)
 
 def format_open_orders_md(orders: list, limit: int = 8) -> str:
     if not orders:
         return "📋 <b>Órdenes abiertas</b>: (ninguna)"
-
+    rows = orders[:limit]
     out = ["📋 <b>Órdenes abiertas</b>"]
-
-    header = row_join([
-        pad("COIN", 5),
-        pad("SIDE", 8),
-        pad("SZ", 12),
-        pad("PX", 12),
-        pad("TYPE", 8),
-        pad("TRIG", 6),
-        pad("TPX", 10),
-    ])
-    sep = "-" * len(header)
-
-    rows = []
-    for o in orders[:limit]:
+    for o in rows:
         coin = o.get("coin", "-")
         side = o.get("side", "-")
-        side_txt = "Buy" if side == "B" else "Sell" if side == "A" else str(side)
-        side_txt = f"{LONG_EMOJI} {side_txt}" if side_txt.lower().startswith("b") else f"{SHORT_EMOJI} {side_txt}" if side_txt.lower().startswith("s") else f"{NEUTRAL_EMOJI} {side_txt}"
+        side_txt = "Sell" if side == "A" else ("Buy" if side == "B" else str(side))
+        # Emoji de lado
+        side_html_badge = f"{LONG_EMOJI} <b>{side_txt}</b>" if side_txt.lower().startswith("b") \
+                          else f"{SHORT_EMOJI} <b>{side_txt}</b>" if side_txt.lower().startswith("s") \
+                          else f"{NEUTRAL_EMOJI} <b>{side_txt}</b>"
         sz = fmt_num(o.get("sz", o.get("origSz", "-")), 2)
         px = fmt_num(o.get("limitPx", "-"), 2)
         typ = o.get("orderType", "Limit")
@@ -181,54 +167,26 @@ def format_open_orders_md(orders: list, limit: int = 8) -> str:
         tpx_raw = o.get("triggerPx", "0")
         tpx = fmt_num(tpx_raw, 2) if tpx_raw not in (None, "0", 0) else "0.00"
 
-        rows.append(row_join([
-            pad(coin, 5),
-            pad(side_txt, 8),
-            pad(sz, 12),
-            pad(px, 12),
-            pad(typ, 8),
-            pad(trig, 6),
-            pad(tpx, 10),
-        ]))
-
-    table = "<pre>\n" + header + "\n" + sep + "\n" + "\n".join(rows) + "\n</pre>"
+        out.append(
+            f"• <b>{coin}</b> {side_html_badge} {sz}@{px}  ({typ}, trig={trig} {tpx})"
+        )
     if len(orders) > limit:
-        table += f"\n<i>…y {len(orders)-limit} más</i>"
-
-    out.append(table)
+        out.append(f"<i>…y {len(orders)-limit} más</i>")
     return "\n".join(out)
 
 def format_recent_fills_md(fills: list, limit: int = 5) -> str:
     if not fills:
         return "🧾 <b>Fills recientes</b>: (sin actividad)"
-
+    rows = fills[:limit]
     out = ["🧾 <b>Fills recientes</b>"]
-
-    header = row_join([
-        pad("TIME (UTC)", 17),
-        pad("COIN", 5),
-        pad("DIR", 12),
-        pad("SZ@PX", 22),
-    ])
-    sep = "-" * len(header)
-
-    rows = []
-    for f in fills[:limit]:
+    for f in rows:
         coin = f.get("coin", "-")
         dirn = f.get("dir", "-") or "-"
         dlow = dirn.lower()
-        dir_emoji = LONG_EMOJI if "long" in dlow else SHORT_EMOJI if "short" in dlow else NEUTRAL_EMOJI
+        emoji = LONG_EMOJI if "long" in dlow else SHORT_EMOJI if "short" in dlow else NEUTRAL_EMOJI
         sz = fmt_num(f.get("sz", "-"), 2)
         px = fmt_num(f.get("px", "-"), 2)
-        t = _ts(f.get("time"))
+        t = _ts_local(f.get("time"))
 
-        rows.append(row_join([
-            pad(t, 17),
-            pad(coin, 5),
-            pad(f"{dir_emoji} {dirn}", 12),
-            pad(f"{sz}@{px}", 22),
-        ]))
-
-    table = "<pre>\n" + header + "\n" + sep + "\n" + "\n".join(rows) + "\n</pre>"
-    out.append(table)
+        out.append(f"• {t} — <b>{coin}</b> {emoji} <b>{dirn}</b> {sz}@{px}")
     return "\n".join(out)
