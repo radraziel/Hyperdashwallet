@@ -5,8 +5,11 @@ from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
 from aiogram.types import Message
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
-import requests
-from bs4 import BeautifulSoup
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 import re
 from datetime import datetime
 
@@ -19,31 +22,35 @@ WEB_SERVER_PORT = int(os.getenv('PORT', 8080))
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
+def get_webdriver():
+    """Configura un driver headless para Selenium."""
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")  # Sin GUI
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--window-size=1920,1080")
+    return webdriver.Chrome(options=chrome_options)
+
 async def fetch_wallet_data(address: str) -> str:
-    """Scraping de datos de HyperDash con manejo avanzado de bloqueos."""
+    """Scraping de datos de HyperDash usando Selenium."""
     url = f"https://hyperdash.info/trader/{address}"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.5",
-        "Referer": "https://hyperdash.info/",
-    }
     try:
-        # Intento 1: Solicitud directa con headers
-        response = requests.get(url, headers=headers, timeout=10)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, 'html.parser')
-        
-        # Intento 2: Si falla, simula un navegador más
-        if not soup.find('div', {'class': 'asset-positions'}):  # Ajusta selector
-            headers["User-Agent"] = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Safari/605.1.15"
-            response = requests.get(url, headers=headers, timeout=10)
-            response.raise_for_status()
-            soup = BeautifulSoup(response.text, 'html.parser')
+        # Inicia el driver
+        driver = get_webdriver()
+        driver.get(url)
+
+        # Espera a que los datos se carguen (ajusta el selector según el HTML real)
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.CLASS_NAME, "asset-positions"))
+        )
+
+        # Obtiene el HTML renderizado
+        soup = BeautifulSoup(driver.page_source, 'html.parser')
 
         # Parsing de posiciones abiertas
         positions = []
-        pos_section = soup.find('div', {'class': 'asset-positions'})  # Ajusta según HTML real
+        pos_section = soup.find('div', {'class': 'asset-positions'})  # Ajusta según HTML
         if pos_section:
             rows = pos_section.find_all('tr')
             for row in rows[1:]:
@@ -70,6 +77,8 @@ async def fetch_wallet_data(address: str) -> str:
             for item in items:
                 recent.append(item.get_text(strip=True))
 
+        driver.quit()
+
         message = (
             f"📊 **Datos para {address}** ({datetime.now().strftime('%Y-%m-%d %H:%M')})\n\n"
             f"**Posiciones abiertas:**\n" + "\n".join(positions) + "\n\n"
@@ -78,8 +87,10 @@ async def fetch_wallet_data(address: str) -> str:
         )
         return message if positions or recent else "No se encontraron datos. Verifica la dirección."
 
-    except requests.exceptions.RequestException as e:
-        return f"❌ Error al obtener datos: {str(e)} (Código: {getattr(e.response, 'status_code', 'N/A')})"
+    except Exception as e:
+        if 'driver' in locals():
+            driver.quit()
+        return f"❌ Error al obtener datos: {str(e)}"
 
 @dp.message(Command("start"))
 async def start_handler(message: Message):
