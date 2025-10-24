@@ -1,7 +1,6 @@
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
-# Zona horaria local (CDMX)
 try:
     from zoneinfo import ZoneInfo
     MX_TZ = ZoneInfo("America/Mexico_City")
@@ -21,7 +20,6 @@ def _to_decimal(x):
         return None
 
 def fmt_num(x, decimals: int = 2, show_sign: bool = False):
-    """Formatea número con comas, decimales y signo opcional (+ para positivos)."""
     d = _to_decimal(x)
     if d is None:
         return str(x) if x is not None else "-"
@@ -30,8 +28,8 @@ def fmt_num(x, decimals: int = 2, show_sign: bool = False):
     sign = "+" if show_sign and d > 0 else ""
     return f"{sign}{d:,.{decimals}f}"
 
-def fmt_usd(x, decimals: int = 2, bold: bool = False, emoji: bool = False):
-    """Permite poner en negritas y agregar emoji 💰 si emoji=True."""
+def fmt_usd(x, decimals: int = 2, bold: bool = False):
+    """Permite poner en negritas el valor si bold=True."""
     d = _to_decimal(x)
     if d is None:
         val = str(x) if x is not None else "-"
@@ -39,12 +37,9 @@ def fmt_usd(x, decimals: int = 2, bold: bool = False, emoji: bool = False):
         q = Decimal(10) ** -decimals
         d = d.quantize(q)
         val = f"${d:,.{decimals}f}"
-    if emoji:
-        val = f"💰 {val}"
     return f"<b>{val}</b>" if bold else val
 
 def _offset_str(dt):
-    """Devuelve offset como 'GMT-06:00'."""
     try:
         ofs = dt.utcoffset()
         if ofs is None:
@@ -87,7 +82,6 @@ def side_html(szi_decimal: Decimal | None) -> str:
     return f"{LONG_EMOJI} <b>Long</b>" if szi_decimal > 0 else f"{SHORT_EMOJI} <b>Short</b>"
 
 def pnl_html(u_pnl_decimal: Decimal | None, formatted_value: str) -> str:
-    """Agrega emoji según signo al P&L ya formateado con +/-."""
     if u_pnl_decimal is None or u_pnl_decimal == 0:
         return f"{NEUTRAL_EMOJI} {formatted_value}"
     return f"{LONG_EMOJI} {formatted_value}" if u_pnl_decimal > 0 else f"{SHORT_EMOJI} {formatted_value}"
@@ -127,8 +121,7 @@ def format_positions_md(state: dict) -> str:
         entry_f = fmt_num(entry, 2)
         liq_f = fmt_num(liq, 2)
         pnl_f = fmt_num(u_pnl, 2, show_sign=True)
-        # 💰 bold + emoji
-        ntl_f = fmt_usd(ntl, 2, bold=True, emoji=True)
+        ntl_f = fmt_usd(ntl, 2, bold=True)  # 🔥 ahora se muestra en negritas
         pnl_badge = pnl_html(u_pnl_d, pnl_f)
 
         block = [
