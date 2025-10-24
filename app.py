@@ -24,7 +24,7 @@ app = Flask(__name__)
 ADDRESS_RE = re.compile(r"^0x[a-fA-F0-9]{40}$")
 
 
-def send_message(chat_id: int, text: str, parse_mode: str = "Markdown"):
+def send_message(chat_id: int, text: str, parse_mode: str = "HTML"):
     # Telegram limita mensajes ~4096 chars: segmentamos si es necesario
     max_len = 3900
     blocks = [text[i:i+max_len] for i in range(0, len(text), max_len)] or [text]
